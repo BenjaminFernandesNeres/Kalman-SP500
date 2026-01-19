@@ -1,1 +1,223 @@
-/Users/benkomara/Downloads/Report.pdf
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{setspace}
+\usepackage{hyperref}
+
+\onehalfspacing
+\setlength{\parskip}{0.4em}
+\setlength{\parindent}{0pt}
+
+\title{Trend-Following on the S\&P 500 with a Kalman Filter}
+\author{Financial Econometrics II -- Group Assignment}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section*{Abstract}
+This report summarizes a trend-following project on the S\&P 500 using a Kalman filter to estimate a latent trend and slope. We analyze the distribution of the spread between log-prices and the estimated trend, study macroeconomic factors as potential explanatory variables, and design several trading strategies. A regime-dependent strategy combines trend-following and contrarian signals. Performance is evaluated with annualized metrics and a bootstrap test of statistical significance.
+
+\section{Definitions and Model}
+The dataset (file \texttt{GROUP DATASET.xlsx}) contains daily S\&P 500 net total return prices and a set of daily macroeconomic factors. Prices are transformed to log-levels for the Kalman filter, and daily returns are computed for performance evaluation.
+
+We use a standard local linear trend model:
+\[
+\begin{cases}
+P_t = T_t + \varepsilon_t, \\
+T_t = T_{t-1} + S_{t-1} + u_t, \\
+S_t = S_{t-1} + v_t,
+\end{cases}
+\]
+where $P_t$ is the observed log-price, $T_t$ is the latent trend, and $S_t$ is the latent slope. The Kalman filter provides estimates of $T_t$ and $S_t$ and their uncertainty. In state-space form, with $x_t = [T_t, S_t]'$, the transition and observation equations are
+\[
+x_t = A x_{t-1} + w_t, \quad P_t = Z x_t + e_t,
+\]
+with
+\[
+A =
+\begin{bmatrix}
+1 & 1 \\
+0 & 1
+\end{bmatrix},
+\quad
+Z =
+\begin{bmatrix}
+1 & 0
+\end{bmatrix},
+\quad
+w_t \sim \mathcal{N}(0, Q),
+\quad
+e_t \sim \mathcal{N}(0, H).
+\]
+The error covariances are parameterized as
+\[
+H = \sigma_\varepsilon^2,
+\quad
+Q =
+\begin{bmatrix}
+0.05\,H & 0 \\
+0 & 0.05 \cdot 0.05\,H
+\end{bmatrix},
+\]
+ so $Q$ is scaled relative to $H$ to stabilize optimization; the 0.05 ratio keeps state noise small relative to observation noise and reflects the assumption that the trend evolves smoothly, with slope innovations smaller still. The spread is defined as
+\[
+\Delta_t = \ln(P_t) - T_t.
+\]
+These latent-state estimates allow us to separate slow-moving trend dynamics ($T_t$) from short-term deviations ($\Delta_t$) and to construct signals for both trend continuation and mean reversion.
+
+\section{Question 1: Abnormal Spread Thresholds}
+The question asks from what level of the spread $\Delta_t$ the deviation from trend becomes ``abnormal.'' Empirically, the distribution of $\Delta_t$ is non-Gaussian: the histogram is heavy-tailed and asymmetric, and the Jarque-Bera test rejects normality. This implies that standard deviation cutoffs (e.g., $\pm 2\sigma$) would be sensitive to outliers and would not correctly capture tail risk. 
+
+We therefore define abnormal deviations using empirical quantiles:
+\[
+\Delta_t < Q_{0.05} \quad \text{or} \quad \Delta_t > Q_{0.95}.
+\]
+By construction, roughly 10\% of observations are classified as abnormal, focusing attention on the extreme tails rather than assuming symmetry or Gaussianity. This definition is robust to fat tails and provides interpretable thresholds for contrarian signals in Question 3.
+
+\section{Question 2: Macroeconomic Factors and the Spread}
+The question asks whether macroeconomic factors are good explanatory variables for the spread level. We begin with a linear specification,
+\[
+\Delta_t = \alpha + X_t'\beta + \eta_t,
+\]
+where $X_t$ contains the macro factors. Because many macro variables move together (e.g., global risk and credit indicators), we first compute variance inflation factors (VIF). The VIF analysis shows substantial multicollinearity, meaning that plain OLS coefficients are unstable and hard to interpret.
+
+For each factor $x_i$, the VIF is defined as
+\[
+\text{VIF}_i = \frac{1}{1 - R_i^2},
+\]
+where $R_i^2$ is from regressing $x_i$ on all other factors. Large VIF values indicate redundancy and unstable coefficients.
+
+To address this, we use LASSO to obtain a sparse and more stable specification:
+\[
+\min_{\alpha,\beta} \sum_t (\Delta_t - \alpha - X_t'\beta)^2 + \lambda \lVert \beta \rVert_1.
+\]
+The penalty parameter $\lambda$ is selected by 10-fold cross-validation after standardizing both $\Delta_t$ and $X_t$. The coefficient path shows that most factors shrink quickly toward zero as $\lambda$ increases. Only a small subset of factors retains non-zero coefficients, indicating that macro variables contain some explanatory power but that the relationship is weak and unstable at the daily frequency. This outcome is consistent with the idea that macro signals evolve slowly relative to daily market noise.
+
+\section{Question 3: Trading Strategies}
+We build trading rules from the three signals specified in the assignment. Each strategy uses only information available at time $t-1$ (signals are lagged by one day) to avoid look-ahead bias. Daily returns are computed from the S\&P 500 total return index.
+
+Let the daily index return be
+\[
+r_t = \frac{P_t}{P_{t-1}} - 1.
+\]
+The strategy return is
+\[
+r_t^{\text{strat}} = \text{Position}_t \cdot r_t,
+\]
+with $\text{Position}_t \in \{-1, 0, 1\}$. We do not include transaction costs or leverage in this baseline analysis, so results should be interpreted as gross returns.
+
+\subsection*{Strategy 1: Trend-Following (Slope)}
+Position is based on the sign of the estimated slope:
+\[
+\text{Position}_t = \text{sign}(S_{t-1}).
+\]
+This captures persistent trends but can underperform during frequent reversals or sideways markets where $S_t$ changes sign often.
+
+\subsection*{Strategy 2: Macro-Predicted Slope}
+We estimate a predicted slope $\hat{S}_t$ using macro variables and LASSO. Specifically, we fit a cross-validated LASSO model of $S_t$ on $X_t$, then trade on $\text{sign}(\hat{S}_{t-1})$:
+\[
+\hat{S}_t = f_{\text{LASSO}}(X_t), \quad \text{Position}_t = \text{sign}(\hat{S}_{t-1}).
+\]
+This incorporates macro information but depends on the stability of the macro-slope relationship.
+
+\subsection*{Strategy 3: Contrarian Spread Thresholds}
+Positions are contrarian when $\Delta_t$ is extreme:
+\[
+\text{Position}_t =
+\begin{cases}
+1 & \Delta_{t-1} < Q_{0.05}, \\
+-1 & \Delta_{t-1} > Q_{0.95}, \\
+0 & \text{otherwise}.
+\end{cases}
+\]
+This strategy tends to activate during crises or exuberant episodes when deviations from trend are large, reflecting mean-reversion pressure toward the estimated trend.
+
+\subsection*{Final Strategy: Regime-Dependent Combination}
+Signals are combined to account for different market regimes:
+\[
+\text{Position}_t =
+\begin{cases}
+1 & \Delta_{t-1} < Q_{0.05}, \\
+-1 & \Delta_{t-1} > Q_{0.95}, \\
+\text{sign}(S_{t-1} + \hat{S}_{t-1}) & \text{otherwise}.
+\end{cases}
+\]
+This specification is simple, interpretable, and avoids ex post tuning. The contrarian rule is activated only when the spread is extreme; otherwise, the strategy relies on trend continuation and macro guidance.
+
+\section{Question 4: Performance and Luck}
+Performance is evaluated using annualized return, annualized volatility, Sharpe ratio (rf = 0), and maximum drawdown. Annualized return is computed from compounded growth, while volatility is the annualized standard deviation of daily returns. The Sharpe ratio summarizes risk-adjusted performance, and maximum drawdown captures peak-to-trough losses.
+
+The formulas used are standard:
+\[
+R_{\text{ann}} = \left(\prod_{t=1}^T (1 + r_t)\right)^{252/T} - 1, \quad
+\sigma_{\text{ann}} = \sqrt{252}\,\text{std}(r_t),
+\]
+\[
+\text{Sharpe} = \frac{\mathbb{E}[r_t]}{\text{std}(r_t)} \sqrt{252}.
+\]
+
+The notebook results indicate that the S\&P 500 buy-and-hold benchmark achieves an annualized return of roughly 7.7\% with volatility around 19\% and a Sharpe ratio near 0.48. The regime-dependent strategy produces a lower annualized return (around 4.9\%) with similar volatility and a Sharpe ratio near 0.35. The regime-dependent strategy reduces maximum drawdown relative to the benchmark (approximately -41\% vs. -56\%), suggesting improved downside protection at the cost of lower average performance.
+
+\begin{table}[h]
+\centering
+\caption{Illustrative performance metrics reported in the notebook.}
+\begin{tabular}{lcccc}
+\toprule
+Strategy & Ann. Return & Ann. Vol & Sharpe & Max Drawdown \\
+\midrule
+S\&P 500 Buy \& Hold & 7.7\% & 19\% & 0.48 & -56\% \\
+Regime-Dependent Strategy & 4.9\% & 19\% & 0.35 & -41\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+To assess whether performance is due to luck, a block bootstrap test is applied under the null hypothesis $\mathbb{E}[r_t]=0$. Returns are centered and resampled in blocks to preserve time-series dependence. The resulting p-values indicate that the observed performance is not statistically significant at conventional levels. Therefore, while the strategy has positive returns and improved drawdown characteristics, the evidence does not reject the null of zero expected performance.
+
+\section{Conclusion}
+The Kalman filter provides a coherent framework for extracting a latent trend and slope in equity index prices. The spread between log-prices and the trend is heavy-tailed, motivating quantile-based definitions of abnormal deviations. Macro variables show strong multicollinearity, and LASSO is appropriate for parsimonious selection. In trading applications, no single signal dominates across regimes. A regime-dependent strategy combining contrarian and trend-following components improves drawdown characteristics but does not outperform buy-and-hold on a risk-adjusted basis, and its performance is not statistically significant.
+
+\appendix
+\section*{Appendix: Figures}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\textwidth]{\detokenize{graphs/S&P vs Kalman.png}}
+\caption{S\&P 500 log-price and Kalman trend.}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\textwidth]{\detokenize{graphs/Slope.png}}
+\caption{Estimated slope $S_t$ (trend momentum).}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\textwidth]{\detokenize{graphs/Slope Distribution.png}}
+\caption{Distribution of the estimated slope $S_t$.}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\textwidth]{\detokenize{graphs/Spread.png}}
+\caption{Spread $\Delta_t$ over time with pronounced deviations from the Kalman trend.}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\textwidth]{\detokenize{graphs/LASSO.png}}
+\caption{LASSO coefficient path for macro factors (daily data).}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\textwidth]{\detokenize{graphs/Strategies Perf.png}}
+\caption{Cumulative performance of the three strategies versus S\&P 500 buy-and-hold.}
+\end{figure}
+
+\end{document}
